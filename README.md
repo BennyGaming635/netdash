@@ -1,101 +1,45 @@
-# NetDash - UniFi-Style Network Dashboard
+# NetDash - Network Management Applet
 
-A modern, real-time network monitoring dashboard inspired by UniFi, built with React and Flask.
+A simple Python GUI applet for managing and monitoring your local network.
 
 ![NetDash](https://img.shields.io/badge/status-active-success.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 ## Features
 
-### 🖥️ Devices Overview
-- Display connected devices with comprehensive attributes (name, type, IP, MAC address)
-- Live connection status indicators with real-time updates
-- Device categorization (routers, access points, switches)
-- Visual status representation with color-coded indicators
+### 🖥️ Device Management
+- Automatic network scanning and device discovery
+- Manual device addition and removal
+- Device list with IP, hostname, MAC address, and status
+- Save and load device lists
 
-### 📊 Uptime Monitoring
-- Real-time device and network uptime tracking
-- Percentage-based uptime metrics
-- Interactive charts and graphs using Chart.js
-- Historical uptime data visualization
+### 🗺️ Network Mapping
+- Visual network topology display
+- Text-based network map showing device connections
+- Automatic subnet detection
 
-### 🚨 Alerts & Notifications
-- Real-time alerts for offline devices
-- High latency detection
-- Timestamped alert logs with severity levels (error, warning, info)
-- Alert filtering and dismissal capabilities
+### 🛠️ Network Tools
+- **Ping Tool** - Test connectivity to devices
+- **Traceroute** - Trace the path to network hosts
+- **Port Scanner** - Scan for open ports on devices
 
-### 🌐 Topology Visualization
-- Interactive network topology map using Cytoscape.js
-- Dynamic device connection visualization
-- Drag-and-drop node positioning
-- Color-coded status representation
-- Multiple device type shapes (diamond for routers, triangle for APs, rectangle for switches)
+### 📊 Dashboard
+- Real-time device statistics
+- Online/offline device counts
+- Last seen timestamps
+- Activity logging
 
-## Tech Stack
+## Requirements
 
-### Frontend
-- **React 18** with Vite for fast development
-- **Tailwind CSS** for responsive, modern UI
-- **Chart.js** and **react-chartjs-2** for data visualization
-- **Cytoscape.js** with Cola layout for network topology
-- **Socket.IO Client** for real-time updates
-- **Axios** for API communication
+- Python 3.7 or higher
+- tkinter (usually included with Python)
+- Standard library modules (subprocess, socket, threading, etc.)
 
-### Backend
-- **Python Flask** for REST API
-- **Flask-SocketIO** for WebSocket real-time communication
-- **PostgreSQL** for data persistence
-- **SNMP** and **Ping** for device monitoring
-- **Threading** for background monitoring tasks
-
-### Infrastructure
-- **Docker** and **Docker Compose** for containerization
-- **Nginx** for frontend serving and reverse proxy
-- **PostgreSQL** database with health checks
-
-## Project Structure
-
-```
-netdash/
-├── backend/
-│   ├── app.py              # Main Flask application
-│   ├── monitoring.py       # Device monitoring service
-│   ├── database.py         # Database models and utilities
-│   ├── requirements.txt    # Python dependencies
-│   ├── Dockerfile          # Backend Docker configuration
-│   └── .env.example        # Environment variables template
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── DeviceCard.jsx      # Device display component
-│   │   │   ├── AlertList.jsx       # Alerts management
-│   │   │   ├── UptimeChart.jsx     # Uptime visualization
-│   │   │   └── TopologyView.jsx    # Network topology map
-│   │   ├── services/
-│   │   │   ├── api.js              # API client
-│   │   │   └── websocket.js        # WebSocket client
-│   │   ├── App.jsx                 # Main application component
-│   │   ├── main.jsx                # Application entry point
-│   │   └── index.css               # Global styles
-│   ├── package.json        # Frontend dependencies
-│   ├── vite.config.js      # Vite configuration
-│   ├── tailwind.config.js  # Tailwind CSS configuration
-│   ├── Dockerfile          # Frontend Docker configuration
-│   └── nginx.conf          # Nginx configuration
-├── docker-compose.yml      # Docker Compose orchestration
-└── README.md               # This file
-
-```
+No additional dependencies required!
 
 ## Quick Start
 
-### Prerequisites
-- Docker and Docker Compose installed
-- Node.js 18+ (for local development)
-- Python 3.11+ (for local development)
-
-### Using Docker (Recommended)
+### Running the Applet
 
 1. Clone the repository:
 ```bash
@@ -103,228 +47,117 @@ git clone https://github.com/BennyGaming635/netdash.git
 cd netdash
 ```
 
-2. Start the application:
+2. Run the applet:
 ```bash
-docker-compose up -d
+python netdash_applet.py
 ```
 
-3. Access the dashboard:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:5000
-
-4. Stop the application:
+Or make it executable:
 ```bash
-docker-compose down
+chmod +x netdash_applet.py
+./netdash_applet.py
 ```
 
-### Local Development
+### Windows
 
-#### Backend Setup
+Double-click `netdash_applet.py` or run from command prompt:
+```cmd
+python netdash_applet.py
+```
 
-1. Navigate to the backend directory:
+## Usage
+
+### Scanning Your Network
+
+1. Click **"Scan Network"** in the Dashboard tab
+2. The applet will automatically detect your local subnet and scan for devices
+3. Found devices will appear in the device list
+
+### Managing Devices
+
+- **Add Device**: Click "Add Device" to manually add a device by IP address
+- **Remove Device**: Right-click a device and select "Remove Device"
+- **Save/Load**: Use File menu to save or load device lists
+
+### Network Tools
+
+Switch to the **"Network Tools"** tab to access:
+
+- **Ping**: Enter a hostname or IP and click "Ping" to test connectivity
+- **Traceroute**: Trace the network path to a destination
+- **Port Scan**: Scan for open ports (e.g., "20-80,443,8080")
+
+### Network Map
+
+Go to the **"Network Map"** tab to:
+
+1. View a text-based visualization of your network
+2. See device groupings (online/offline)
+3. View network topology diagram
+
+### Logs
+
+The **"Logs"** tab shows all activity and operations performed by the applet.
+
+## Features Detail
+
+### Dashboard Tab
+- Device list with sortable columns
+- Context menu for quick actions (right-click on devices)
+- Real-time statistics
+- Network scanning controls
+
+### Network Map Tab
+- Enter custom subnet ranges
+- Generate visual network maps
+- ASCII-art topology diagrams
+
+### Network Tools Tab
+- Integrated ping utility
+- Traceroute functionality
+- Custom port scanning
+
+### Logs Tab
+- Timestamped activity log
+- Operation tracking
+- Error reporting
+
+## Platform Support
+
+- **Linux**: Full support (requires appropriate permissions for network operations)
+- **macOS**: Full support
+- **Windows**: Full support
+
+### Permissions
+
+On Linux/macOS, you may need to run with elevated privileges for some network operations:
 ```bash
-cd backend
+sudo python netdash_applet.py
 ```
 
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
+## Tips
 
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Create `.env` file from example:
-```bash
-cp .env.example .env
-```
-
-5. Start the backend:
-```bash
-python app.py
-```
-
-The backend will be available at http://localhost:5000
-
-#### Frontend Setup
-
-1. Navigate to the frontend directory:
-```bash
-cd frontend
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Start the development server:
-```bash
-npm run dev
-```
-
-The frontend will be available at http://localhost:3000
-
-## API Endpoints
-
-### Devices
-- `GET /api/devices` - Get all devices
-- `GET /api/devices/:id` - Get specific device
-- `POST /api/devices` - Add new device
-
-### Alerts
-- `GET /api/alerts` - Get all alerts
-- `GET /api/alerts?severity=error` - Filter alerts by severity
-- `DELETE /api/alerts/:id` - Delete an alert
-
-### Uptime
-- `GET /api/uptime/:deviceId` - Get uptime history for a device
-
-### Topology
-- `GET /api/topology` - Get network topology data
-
-## WebSocket Events
-
-### Client → Server
-- `connect` - Client connection
-- `disconnect` - Client disconnection
-- `request_devices` - Request device list
-
-### Server → Client
-- `connection_response` - Connection acknowledgment
-- `device_status_update` - Device status change
-- `device_status_change` - Significant status change
-- `new_alert` - New alert created
-- `uptime_update` - Uptime data update
-- `device_added` - New device added
-
-## Configuration
-
-### Storage
-
-By default, the application uses in-memory storage for quick demos. To enable PostgreSQL persistence:
-
-1. The database models are already implemented in `backend/database.py`
-2. Update `backend/app.py` to use database operations instead of in-memory lists
-3. The application will automatically create necessary tables on startup
-
-Example integration is provided in the codebase for production deployments.
-
-### Environment Variables
-
-#### Backend (.env)
-```env
-DATABASE_URL=postgresql://netdash:netdash@localhost:5432/netdash
-FLASK_ENV=development
-SECRET_KEY=your-secret-key-here
-PORT=5000
-```
-
-#### Frontend
-Create a `.env` file in the frontend directory:
-```env
-VITE_API_URL=http://localhost:5000/api
-VITE_SOCKET_URL=http://localhost:5000
-```
-
-## Monitoring Features
-
-The application includes a background monitoring service that:
-- Pings devices every 10 seconds to check availability
-- Updates device status in real-time
-- Calculates uptime percentages
-- Generates alerts for offline devices
-- Broadcasts updates via WebSocket
-
-## Deployment
-
-### Production Deployment with Docker
-
-1. Set production environment variables:
-```bash
-export SECRET_KEY="your-secure-secret-key"
-```
-
-2. Build and run:
-```bash
-docker-compose up -d --build
-```
-
-3. Monitor logs:
-```bash
-docker-compose logs -f
-```
-
-### Database Backup
-
-```bash
-docker exec netdash-db pg_dump -U netdash netdash > backup.sql
-```
-
-### Database Restore
-
-```bash
-cat backup.sql | docker exec -i netdash-db psql -U netdash netdash
-```
-
-## Development
-
-### Adding New Devices
-
-Devices can be added via the API:
-
-```bash
-curl -X POST http://localhost:5000/api/devices \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "New Router",
-    "type": "router",
-    "ip": "192.168.1.1",
-    "mac": "00:11:22:33:44:55"
-  }'
-```
-
-### Customizing the UI
-
-The UI uses Tailwind CSS for styling. Main color scheme:
-- Primary: `#0ea5e9` (Sky Blue)
-- Success: `#10b981` (Green)
-- Warning: `#f59e0b` (Amber)
-- Danger: `#ef4444` (Red)
-- Background: `#0f172a` (Slate)
+- Network scans can take a few minutes depending on your subnet size
+- Save your device list to avoid rescanning every time
+- Use the right-click context menu on devices for quick actions
+- Check the Logs tab if something isn't working as expected
 
 ## Troubleshooting
 
-### Backend won't start
-- Check if port 5000 is available
-- Verify PostgreSQL is running
-- Check database credentials in .env
+### Scan not finding devices
+- Ensure you're on the same network as the devices
+- Check firewall settings (ICMP/ping must be allowed)
+- Try manually adding devices if automatic scanning fails
 
-### Frontend won't connect to backend
-- Verify backend is running on port 5000
-- Check CORS settings in Flask app
-- Ensure WebSocket connection is not blocked by firewall
+### Tools not working
+- On Linux/macOS, some tools may require sudo privileges
+- Ensure the commands (ping, traceroute) are available on your system
+- Check the Logs tab for error messages
 
-### No device updates
-- Verify devices have correct IP addresses
-- Check if ping is allowed in your network
-- Review backend logs for monitoring errors
-
-## Future Enhancements
-
-- [ ] SNMP integration for detailed device statistics
-- [ ] User authentication and authorization
-- [ ] Custom alert rules and thresholds
-- [ ] Email/SMS notifications
-- [ ] Historical data analytics
-- [ ] Multi-site support
-- [ ] Mobile responsive optimizations
-- [ ] Dark/Light theme toggle
-- [ ] Export reports (PDF, CSV)
-- [ ] Device grouping and tagging
+### Application won't start
+- Verify Python 3.7+ is installed: `python --version`
+- Ensure tkinter is available: `python -c "import tkinter"`
+- Check for error messages in the terminal
 
 ## Contributing
 
@@ -332,13 +165,13 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
-- Inspired by Ubiquiti UniFi Network Application
-- Built with open-source technologies
-- Community-driven development
+- Built with Python's tkinter for maximum compatibility
+- Cross-platform network utilities
+- Simple and lightweight design
 
 ## Support
 
