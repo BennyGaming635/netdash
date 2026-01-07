@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: netdash-db
+    environment:
+      POSTGRES_DB: netdash
+      POSTGRES_USER: netdash
+      POSTGRES_PASSWORD: netdash
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - netdash-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netdash"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: netdash-backend
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL: postgresql://netdash:netdash@postgres:5432/netdash
+      FLASK_ENV: production
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      PORT: 5000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - netdash-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: netdash-frontend
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://localhost:5000/api
+      VITE_SOCKET_URL: http://localhost:5000
+    depends_on:
+      - backend
+    networks:
+      - netdash-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  netdash-network:
+    driver: bridge
