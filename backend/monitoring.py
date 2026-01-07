@@ -5,6 +5,7 @@ import subprocess
 import time
 from datetime import datetime
 import threading
+import platform
 
 class DeviceMonitor:
     def __init__(self, devices, socketio):
@@ -16,9 +17,13 @@ class DeviceMonitor:
     def ping_device(self, ip):
         """Ping a device to check if it's online"""
         try:
-            # Use ping command (works on Linux/Unix)
+            # Determine ping parameters based on OS
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
+            
+            # Use ping command (cross-platform)
             result = subprocess.run(
-                ['ping', '-c', '1', '-W', '1', ip],
+                ['ping', param, '1', timeout_param, '1', ip],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=2

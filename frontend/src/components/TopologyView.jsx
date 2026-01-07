@@ -58,10 +58,6 @@ const TopologyView = () => {
         {
           selector: 'node',
           style: {
-            'background-color': (ele) => {
-              const status = ele.data('status')
-              return status === 'online' ? '#10b981' : '#ef4444'
-            },
             'label': 'data(label)',
             'color': '#f8fafc',
             'text-valign': 'bottom',
@@ -73,6 +69,18 @@ const TopologyView = () => {
             'border-color': '#1e293b',
             'font-size': 14,
             'font-weight': 'bold'
+          }
+        },
+        {
+          selector: 'node[status="online"]',
+          style: {
+            'background-color': '#10b981'
+          }
+        },
+        {
+          selector: 'node[status="offline"]',
+          style: {
+            'background-color': '#ef4444'
           }
         },
         {

@@ -203,6 +203,16 @@ The frontend will be available at http://localhost:3000
 
 ## Configuration
 
+### Storage
+
+By default, the application uses in-memory storage for quick demos. To enable PostgreSQL persistence:
+
+1. The database models are already implemented in `backend/database.py`
+2. Update `backend/app.py` to use database operations instead of in-memory lists
+3. The application will automatically create necessary tables on startup
+
+Example integration is provided in the codebase for production deployments.
+
 ### Environment Variables
 
 #### Backend (.env)

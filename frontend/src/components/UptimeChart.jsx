@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { Bar } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -20,6 +20,16 @@ ChartJS.register(
 )
 
 const UptimeChart = ({ devices }) => {
+  // Memoize statistics calculation
+  const statistics = useMemo(() => {
+    const avgUptime = devices.length > 0 
+      ? (devices.reduce((sum, d) => sum + d.uptime, 0) / devices.length).toFixed(2)
+      : 0
+    const onlineCount = devices.filter(d => d.status === 'online').length
+    const offlineCount = devices.filter(d => d.status === 'offline').length
+    
+    return { avgUptime, onlineCount, offlineCount }
+  }, [devices])
   const data = {
     labels: devices.map(d => d.name),
     datasets: [
@@ -107,21 +117,19 @@ const UptimeChart = ({ devices }) => {
         <div className="bg-slate-700/50 rounded-lg p-4 text-center">
           <p className="text-slate-400 text-sm mb-1">Average Uptime</p>
           <p className="text-2xl font-bold text-white">
-            {devices.length > 0 
-              ? (devices.reduce((sum, d) => sum + d.uptime, 0) / devices.length).toFixed(2)
-              : 0}%
+            {statistics.avgUptime}%
           </p>
         </div>
         <div className="bg-slate-700/50 rounded-lg p-4 text-center">
           <p className="text-slate-400 text-sm mb-1">Devices Online</p>
           <p className="text-2xl font-bold text-green-400">
-            {devices.filter(d => d.status === 'online').length}
+            {statistics.onlineCount}
           </p>
         </div>
         <div className="bg-slate-700/50 rounded-lg p-4 text-center">
           <p className="text-slate-400 text-sm mb-1">Devices Offline</p>
           <p className="text-2xl font-bold text-red-400">
-            {devices.filter(d => d.status === 'offline').length}
+            {statistics.offlineCount}
           </p>
         </div>
       </div>

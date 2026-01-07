@@ -21,7 +21,8 @@ CORS(app)
 # Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# In-memory storage (replace with database in production)
+# In-memory storage (for demo purposes - see database.py for PostgreSQL integration)
+# To use database storage, uncomment the database integration code below
 devices = [
     {
         'id': 1,
