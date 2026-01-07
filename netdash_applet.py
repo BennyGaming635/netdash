@@ -1,0 +1,696 @@
+#!/usr/bin/env python3
+"""
+NetDash Applet - A simple GUI network management tool
+Provides network scanning, monitoring, and management capabilities.
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+import threading
+import subprocess
+import platform
+import socket
+import ipaddress
+import re
+from datetime import datetime
+import json
+import os
+
+class NetworkDevice:
+    """Represents a network device"""
+    def __init__(self, ip, hostname="Unknown", mac="Unknown", status="Unknown"):
+        self.ip = ip
+        self.hostname = hostname
+        self.mac = mac
+        self.status = status
+        self.last_seen = datetime.now()
+
+class NetDashApplet:
+    """Main application class for the network management applet"""
+    
+    def __init__(self, root):
+        self.root = root
+        self.root.title("NetDash - Network Management Applet")
+        self.root.geometry("1000x700")
+        
+        # Data storage
+        self.devices = {}
+        self.scanning = False
+        
+        # Configure style
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        
+        # Create UI
+        self.create_menu()
+        self.create_main_layout()
+        
+    def create_menu(self):
+        """Create menu bar"""
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        
+        # File menu
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Save Devices", command=self.save_devices)
+        file_menu.add_command(label="Load Devices", command=self.load_devices)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.quit)
+        
+        # Tools menu
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Tools", menu=tools_menu)
+        tools_menu.add_command(label="Scan Network", command=self.start_network_scan)
+        tools_menu.add_command(label="Clear All Devices", command=self.clear_devices)
+        
+        # Help menu
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="About", command=self.show_about)
+        
+    def create_main_layout(self):
+        """Create main layout with tabs"""
+        # Create notebook (tabbed interface)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Create tabs
+        self.create_dashboard_tab()
+        self.create_network_map_tab()
+        self.create_tools_tab()
+        self.create_logs_tab()
+        
+    def create_dashboard_tab(self):
+        """Create dashboard tab showing devices"""
+        dashboard_frame = ttk.Frame(self.notebook)
+        self.notebook.add(dashboard_frame, text="Dashboard")
+        
+        # Top control panel
+        control_frame = ttk.Frame(dashboard_frame)
+        control_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Button(control_frame, text="Scan Network", 
+                  command=self.start_network_scan).pack(side='left', padx=5)
+        ttk.Button(control_frame, text="Refresh", 
+                  command=self.refresh_devices).pack(side='left', padx=5)
+        ttk.Button(control_frame, text="Add Device", 
+                  command=self.add_device_dialog).pack(side='left', padx=5)
+        
+        self.scan_status_label = ttk.Label(control_frame, text="Ready")
+        self.scan_status_label.pack(side='left', padx=20)
+        
+        # Device list with treeview
+        list_frame = ttk.Frame(dashboard_frame)
+        list_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Treeview for devices
+        columns = ('IP', 'Hostname', 'MAC', 'Status', 'Last Seen')
+        self.device_tree = ttk.Treeview(list_frame, columns=columns, 
+                                        show='tree headings', 
+                                        yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.device_tree.yview)
+        
+        # Configure columns
+        self.device_tree.column('#0', width=50)
+        self.device_tree.heading('#0', text='#')
+        
+        for col in columns:
+            self.device_tree.heading(col, text=col)
+            self.device_tree.column(col, width=150)
+        
+        self.device_tree.pack(fill='both', expand=True)
+        
+        # Context menu for device tree
+        self.device_menu = tk.Menu(self.device_tree, tearoff=0)
+        self.device_menu.add_command(label="Ping Device", command=self.ping_selected_device)
+        self.device_menu.add_command(label="Trace Route", command=self.trace_selected_device)
+        self.device_menu.add_command(label="Remove Device", command=self.remove_selected_device)
+        
+        self.device_tree.bind("<Button-3>", self.show_device_context_menu)
+        
+        # Stats frame
+        stats_frame = ttk.LabelFrame(dashboard_frame, text="Statistics")
+        stats_frame.pack(fill='x', padx=5, pady=5)
+        
+        self.stats_label = ttk.Label(stats_frame, text="Devices: 0 | Online: 0 | Offline: 0")
+        self.stats_label.pack(padx=5, pady=5)
+        
+    def create_network_map_tab(self):
+        """Create network map visualization tab"""
+        map_frame = ttk.Frame(self.notebook)
+        self.notebook.add(map_frame, text="Network Map")
+        
+        # Control panel
+        control_frame = ttk.Frame(map_frame)
+        control_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(control_frame, text="Network Subnet:").pack(side='left', padx=5)
+        self.subnet_entry = ttk.Entry(control_frame, width=20)
+        self.subnet_entry.insert(0, "192.168.1.0/24")
+        self.subnet_entry.pack(side='left', padx=5)
+        
+        ttk.Button(control_frame, text="Generate Map", 
+                  command=self.generate_network_map).pack(side='left', padx=5)
+        
+        # Map display area (text-based for simplicity)
+        map_display_frame = ttk.LabelFrame(map_frame, text="Network Topology")
+        map_display_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.map_text = scrolledtext.ScrolledText(map_display_frame, wrap=tk.WORD,
+                                                   font=('Courier', 10))
+        self.map_text.pack(fill='both', expand=True, padx=5, pady=5)
+        
+    def create_tools_tab(self):
+        """Create network tools tab"""
+        tools_frame = ttk.Frame(self.notebook)
+        self.notebook.add(tools_frame, text="Network Tools")
+        
+        # Ping tool
+        ping_frame = ttk.LabelFrame(tools_frame, text="Ping Tool")
+        ping_frame.pack(fill='x', padx=5, pady=5)
+        
+        ping_input_frame = ttk.Frame(ping_frame)
+        ping_input_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(ping_input_frame, text="Host:").pack(side='left', padx=5)
+        self.ping_entry = ttk.Entry(ping_input_frame, width=30)
+        self.ping_entry.pack(side='left', padx=5)
+        ttk.Button(ping_input_frame, text="Ping", 
+                  command=self.run_ping_tool).pack(side='left', padx=5)
+        
+        self.ping_result = scrolledtext.ScrolledText(ping_frame, height=6, wrap=tk.WORD)
+        self.ping_result.pack(fill='x', padx=5, pady=5)
+        
+        # Traceroute tool
+        trace_frame = ttk.LabelFrame(tools_frame, text="Traceroute Tool")
+        trace_frame.pack(fill='x', padx=5, pady=5)
+        
+        trace_input_frame = ttk.Frame(trace_frame)
+        trace_input_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(trace_input_frame, text="Host:").pack(side='left', padx=5)
+        self.trace_entry = ttk.Entry(trace_input_frame, width=30)
+        self.trace_entry.pack(side='left', padx=5)
+        ttk.Button(trace_input_frame, text="Trace", 
+                  command=self.run_traceroute_tool).pack(side='left', padx=5)
+        
+        self.trace_result = scrolledtext.ScrolledText(trace_frame, height=6, wrap=tk.WORD)
+        self.trace_result.pack(fill='x', padx=5, pady=5)
+        
+        # Port scan tool
+        port_frame = ttk.LabelFrame(tools_frame, text="Port Scanner")
+        port_frame.pack(fill='x', padx=5, pady=5)
+        
+        port_input_frame = ttk.Frame(port_frame)
+        port_input_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(port_input_frame, text="Host:").pack(side='left', padx=5)
+        self.port_host_entry = ttk.Entry(port_input_frame, width=20)
+        self.port_host_entry.pack(side='left', padx=5)
+        
+        ttk.Label(port_input_frame, text="Ports:").pack(side='left', padx=5)
+        self.port_range_entry = ttk.Entry(port_input_frame, width=15)
+        self.port_range_entry.insert(0, "20-80,443,8080")
+        self.port_range_entry.pack(side='left', padx=5)
+        
+        ttk.Button(port_input_frame, text="Scan", 
+                  command=self.run_port_scan).pack(side='left', padx=5)
+        
+        self.port_result = scrolledtext.ScrolledText(port_frame, height=6, wrap=tk.WORD)
+        self.port_result.pack(fill='x', padx=5, pady=5)
+        
+    def create_logs_tab(self):
+        """Create logs tab"""
+        logs_frame = ttk.Frame(self.notebook)
+        self.notebook.add(logs_frame, text="Logs")
+        
+        # Control panel
+        control_frame = ttk.Frame(logs_frame)
+        control_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Button(control_frame, text="Clear Logs", 
+                  command=self.clear_logs).pack(side='left', padx=5)
+        
+        # Log display
+        self.log_text = scrolledtext.ScrolledText(logs_frame, wrap=tk.WORD,
+                                                   font=('Courier', 9))
+        self.log_text.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        self.log("NetDash Applet started")
+        
+    def log(self, message):
+        """Add message to logs"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}\n"
+        self.log_text.insert(tk.END, log_entry)
+        self.log_text.see(tk.END)
+        
+    def clear_logs(self):
+        """Clear all logs"""
+        self.log_text.delete(1.0, tk.END)
+        self.log("Logs cleared")
+        
+    def start_network_scan(self):
+        """Start network scanning in background thread"""
+        if self.scanning:
+            messagebox.showwarning("Scan in Progress", "A network scan is already running")
+            return
+            
+        self.scanning = True
+        self.scan_status_label.config(text="Scanning...")
+        self.log("Starting network scan...")
+        
+        # Run scan in background thread
+        thread = threading.Thread(target=self.perform_network_scan, daemon=True)
+        thread.start()
+        
+    def perform_network_scan(self):
+        """Perform the actual network scan"""
+        try:
+            # Get local IP and subnet
+            local_ip = self.get_local_ip()
+            if not local_ip:
+                self.log("Could not determine local IP address")
+                self.scanning = False
+                self.scan_status_label.config(text="Ready")
+                return
+                
+            self.log(f"Local IP: {local_ip}")
+            
+            # Calculate subnet
+            network = ipaddress.IPv4Network(f"{local_ip}/24", strict=False)
+            self.log(f"Scanning subnet: {network}")
+            
+            count = 0
+            for ip in network.hosts():
+                if not self.scanning:
+                    break
+                    
+                ip_str = str(ip)
+                
+                # Try to ping the host
+                if self.ping_host(ip_str, timeout=1):
+                    count += 1
+                    hostname = self.get_hostname(ip_str)
+                    
+                    device = NetworkDevice(ip_str, hostname=hostname, status="Online")
+                    self.devices[ip_str] = device
+                    
+                    self.log(f"Found device: {ip_str} ({hostname})")
+                    
+                    # Update UI
+                    self.root.after(0, self.refresh_devices)
+            
+            self.log(f"Scan complete. Found {count} devices")
+            
+        except Exception as e:
+            self.log(f"Error during scan: {str(e)}")
+        finally:
+            self.scanning = False
+            self.root.after(0, lambda: self.scan_status_label.config(text="Ready"))
+            
+    def ping_host(self, host, timeout=2):
+        """Ping a host to check if it's alive"""
+        try:
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            timeout_param = '-w' if platform.system().lower() == 'windows' else '-W'
+            
+            command = ['ping', param, '1', timeout_param, str(timeout), host]
+            result = subprocess.run(command, stdout=subprocess.PIPE, 
+                                   stderr=subprocess.PIPE, timeout=timeout+1)
+            return result.returncode == 0
+        except:
+            return False
+            
+    def get_local_ip(self):
+        """Get local IP address"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            return local_ip
+        except:
+            return None
+            
+    def get_hostname(self, ip):
+        """Get hostname for IP address"""
+        try:
+            hostname = socket.gethostbyaddr(ip)[0]
+            return hostname
+        except:
+            return "Unknown"
+            
+    def refresh_devices(self):
+        """Refresh device list in UI"""
+        # Clear existing items
+        for item in self.device_tree.get_children():
+            self.device_tree.delete(item)
+            
+        # Add devices
+        online_count = 0
+        for idx, (ip, device) in enumerate(sorted(self.devices.items()), 1):
+            status = device.status
+            if status == "Online":
+                online_count += 1
+                
+            last_seen = device.last_seen.strftime("%Y-%m-%d %H:%M:%S")
+            
+            self.device_tree.insert('', 'end', text=str(idx),
+                                   values=(device.ip, device.hostname, 
+                                          device.mac, status, last_seen))
+        
+        # Update stats
+        total = len(self.devices)
+        offline_count = total - online_count
+        self.stats_label.config(text=f"Devices: {total} | Online: {online_count} | Offline: {offline_count}")
+        
+    def add_device_dialog(self):
+        """Show dialog to manually add a device"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Device")
+        dialog.geometry("400x200")
+        
+        ttk.Label(dialog, text="IP Address:").grid(row=0, column=0, padx=5, pady=5, sticky='e')
+        ip_entry = ttk.Entry(dialog, width=30)
+        ip_entry.grid(row=0, column=1, padx=5, pady=5)
+        
+        ttk.Label(dialog, text="Hostname:").grid(row=1, column=0, padx=5, pady=5, sticky='e')
+        hostname_entry = ttk.Entry(dialog, width=30)
+        hostname_entry.grid(row=1, column=1, padx=5, pady=5)
+        
+        ttk.Label(dialog, text="MAC Address:").grid(row=2, column=0, padx=5, pady=5, sticky='e')
+        mac_entry = ttk.Entry(dialog, width=30)
+        mac_entry.grid(row=2, column=1, padx=5, pady=5)
+        
+        def add_device():
+            ip = ip_entry.get().strip()
+            hostname = hostname_entry.get().strip() or "Unknown"
+            mac = mac_entry.get().strip() or "Unknown"
+            
+            if not ip:
+                messagebox.showwarning("Invalid Input", "IP address is required")
+                return
+                
+            device = NetworkDevice(ip, hostname=hostname, mac=mac, status="Unknown")
+            self.devices[ip] = device
+            self.log(f"Manually added device: {ip}")
+            self.refresh_devices()
+            dialog.destroy()
+            
+        ttk.Button(dialog, text="Add", command=add_device).grid(row=3, column=0, 
+                                                                columnspan=2, pady=10)
+        
+    def show_device_context_menu(self, event):
+        """Show context menu for device"""
+        item = self.device_tree.identify_row(event.y)
+        if item:
+            self.device_tree.selection_set(item)
+            self.device_menu.post(event.x_root, event.y_root)
+            
+    def ping_selected_device(self):
+        """Ping the selected device"""
+        selection = self.device_tree.selection()
+        if not selection:
+            return
+            
+        values = self.device_tree.item(selection[0])['values']
+        if values:
+            ip = values[0]
+            self.ping_entry.delete(0, tk.END)
+            self.ping_entry.insert(0, ip)
+            self.notebook.select(2)  # Switch to tools tab
+            self.run_ping_tool()
+            
+    def trace_selected_device(self):
+        """Trace route to selected device"""
+        selection = self.device_tree.selection()
+        if not selection:
+            return
+            
+        values = self.device_tree.item(selection[0])['values']
+        if values:
+            ip = values[0]
+            self.trace_entry.delete(0, tk.END)
+            self.trace_entry.insert(0, ip)
+            self.notebook.select(2)  # Switch to tools tab
+            self.run_traceroute_tool()
+            
+    def remove_selected_device(self):
+        """Remove selected device"""
+        selection = self.device_tree.selection()
+        if not selection:
+            return
+            
+        values = self.device_tree.item(selection[0])['values']
+        if values:
+            ip = values[0]
+            if messagebox.askyesno("Confirm", f"Remove device {ip}?"):
+                if ip in self.devices:
+                    del self.devices[ip]
+                    self.log(f"Removed device: {ip}")
+                    self.refresh_devices()
+                    
+    def generate_network_map(self):
+        """Generate a text-based network map"""
+        self.map_text.delete(1.0, tk.END)
+        
+        subnet = self.subnet_entry.get()
+        self.map_text.insert(tk.END, f"Network Map for {subnet}\n")
+        self.map_text.insert(tk.END, "=" * 80 + "\n\n")
+        
+        if not self.devices:
+            self.map_text.insert(tk.END, "No devices found. Run a network scan first.\n")
+            return
+            
+        # Group devices by status
+        online_devices = [d for d in self.devices.values() if d.status == "Online"]
+        offline_devices = [d for d in self.devices.values() if d.status != "Online"]
+        
+        # Display online devices
+        self.map_text.insert(tk.END, "ONLINE DEVICES:\n")
+        self.map_text.insert(tk.END, "-" * 80 + "\n")
+        
+        if online_devices:
+            for device in sorted(online_devices, key=lambda x: ipaddress.IPv4Address(x.ip)):
+                self.map_text.insert(tk.END, f"  [{device.ip:15s}] {device.hostname}\n")
+                if device.mac != "Unknown":
+                    self.map_text.insert(tk.END, f"    MAC: {device.mac}\n")
+                self.map_text.insert(tk.END, "\n")
+        else:
+            self.map_text.insert(tk.END, "  No online devices\n\n")
+            
+        # Display offline devices
+        if offline_devices:
+            self.map_text.insert(tk.END, "\nOFFLINE DEVICES:\n")
+            self.map_text.insert(tk.END, "-" * 80 + "\n")
+            for device in sorted(offline_devices, key=lambda x: ipaddress.IPv4Address(x.ip)):
+                self.map_text.insert(tk.END, f"  [{device.ip:15s}] {device.hostname}\n")
+                self.map_text.insert(tk.END, "\n")
+                
+        # Network topology diagram
+        self.map_text.insert(tk.END, "\nNETWORK TOPOLOGY:\n")
+        self.map_text.insert(tk.END, "-" * 80 + "\n")
+        self.map_text.insert(tk.END, "\n")
+        self.map_text.insert(tk.END, "                    [Internet]\n")
+        self.map_text.insert(tk.END, "                         |\n")
+        self.map_text.insert(tk.END, "                    [Router/Gateway]\n")
+        self.map_text.insert(tk.END, "                         |\n")
+        self.map_text.insert(tk.END, "          _______________│_______________\n")
+        self.map_text.insert(tk.END, "         |               |               |\n")
+        
+        # Show some devices in the topology
+        for idx, device in enumerate(list(online_devices)[:3], 1):
+            spaces = " " * (10 + (idx-1) * 20)
+            self.map_text.insert(tk.END, f"{spaces}[{device.hostname[:15]}]\n")
+            self.map_text.insert(tk.END, f"{spaces} {device.ip}\n")
+            
+        self.log("Generated network map")
+        
+    def run_ping_tool(self):
+        """Run ping tool"""
+        host = self.ping_entry.get().strip()
+        if not host:
+            messagebox.showwarning("Invalid Input", "Please enter a host")
+            return
+            
+        self.ping_result.delete(1.0, tk.END)
+        self.ping_result.insert(tk.END, f"Pinging {host}...\n\n")
+        
+        def ping_thread():
+            try:
+                param = '-n' if platform.system().lower() == 'windows' else '-c'
+                command = ['ping', param, '4', host]
+                
+                result = subprocess.run(command, stdout=subprocess.PIPE, 
+                                       stderr=subprocess.PIPE, text=True, timeout=10)
+                
+                output = result.stdout + result.stderr
+                self.root.after(0, lambda: self.ping_result.insert(tk.END, output))
+                self.log(f"Ping completed for {host}")
+                
+            except Exception as e:
+                self.root.after(0, lambda: self.ping_result.insert(tk.END, f"Error: {str(e)}\n"))
+                
+        thread = threading.Thread(target=ping_thread, daemon=True)
+        thread.start()
+        
+    def run_traceroute_tool(self):
+        """Run traceroute tool"""
+        host = self.trace_entry.get().strip()
+        if not host:
+            messagebox.showwarning("Invalid Input", "Please enter a host")
+            return
+            
+        self.trace_result.delete(1.0, tk.END)
+        self.trace_result.insert(tk.END, f"Tracing route to {host}...\n\n")
+        
+        def trace_thread():
+            try:
+                command = ['tracert' if platform.system().lower() == 'windows' else 'traceroute', host]
+                
+                result = subprocess.run(command, stdout=subprocess.PIPE, 
+                                       stderr=subprocess.PIPE, text=True, timeout=60)
+                
+                output = result.stdout + result.stderr
+                self.root.after(0, lambda: self.trace_result.insert(tk.END, output))
+                self.log(f"Traceroute completed for {host}")
+                
+            except Exception as e:
+                self.root.after(0, lambda: self.trace_result.insert(tk.END, f"Error: {str(e)}\n"))
+                
+        thread = threading.Thread(target=trace_thread, daemon=True)
+        thread.start()
+        
+    def run_port_scan(self):
+        """Run port scan"""
+        host = self.port_host_entry.get().strip()
+        ports_str = self.port_range_entry.get().strip()
+        
+        if not host or not ports_str:
+            messagebox.showwarning("Invalid Input", "Please enter host and ports")
+            return
+            
+        self.port_result.delete(1.0, tk.END)
+        self.port_result.insert(tk.END, f"Scanning {host}...\n\n")
+        
+        def scan_thread():
+            try:
+                # Parse port specification
+                ports = []
+                for part in ports_str.split(','):
+                    if '-' in part:
+                        start, end = map(int, part.split('-'))
+                        ports.extend(range(start, end + 1))
+                    else:
+                        ports.append(int(part))
+                        
+                open_ports = []
+                for port in ports:
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(0.5)
+                        result = sock.connect_ex((host, port))
+                        sock.close()
+                        
+                        if result == 0:
+                            open_ports.append(port)
+                            msg = f"Port {port}: OPEN\n"
+                            self.root.after(0, lambda m=msg: self.port_result.insert(tk.END, m))
+                    except:
+                        pass
+                        
+                summary = f"\nScan complete. Found {len(open_ports)} open ports\n"
+                self.root.after(0, lambda: self.port_result.insert(tk.END, summary))
+                self.log(f"Port scan completed for {host}")
+                
+            except Exception as e:
+                self.root.after(0, lambda: self.port_result.insert(tk.END, f"Error: {str(e)}\n"))
+                
+        thread = threading.Thread(target=scan_thread, daemon=True)
+        thread.start()
+        
+    def save_devices(self):
+        """Save devices to file"""
+        try:
+            data = {
+                ip: {
+                    'hostname': device.hostname,
+                    'mac': device.mac,
+                    'status': device.status,
+                    'last_seen': device.last_seen.isoformat()
+                }
+                for ip, device in self.devices.items()
+            }
+            
+            with open('netdash_devices.json', 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            self.log("Devices saved to netdash_devices.json")
+            messagebox.showinfo("Success", "Devices saved successfully")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save devices: {str(e)}")
+            
+    def load_devices(self):
+        """Load devices from file"""
+        try:
+            if not os.path.exists('netdash_devices.json'):
+                messagebox.showwarning("Not Found", "No saved devices file found")
+                return
+                
+            with open('netdash_devices.json', 'r') as f:
+                data = json.load(f)
+                
+            self.devices.clear()
+            for ip, info in data.items():
+                device = NetworkDevice(
+                    ip=ip,
+                    hostname=info['hostname'],
+                    mac=info['mac'],
+                    status=info['status']
+                )
+                self.devices[ip] = device
+                
+            self.refresh_devices()
+            self.log(f"Loaded {len(self.devices)} devices from file")
+            messagebox.showinfo("Success", f"Loaded {len(self.devices)} devices")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load devices: {str(e)}")
+            
+    def clear_devices(self):
+        """Clear all devices"""
+        if messagebox.askyesno("Confirm", "Clear all devices?"):
+            self.devices.clear()
+            self.refresh_devices()
+            self.log("All devices cleared")
+            
+    def show_about(self):
+        """Show about dialog"""
+        about_text = """NetDash Applet v1.0
+
+A simple network management tool for:
+- Network scanning and discovery
+- Device monitoring
+- Network diagnostics (ping, traceroute, port scan)
+- Network topology mapping
+
+Built with Python and tkinter
+Part of the NetDash project"""
+        
+        messagebox.showinfo("About NetDash Applet", about_text)
+
+def main():
+    """Main entry point"""
+    root = tk.Tk()
+    app = NetDashApplet(root)
+    root.mainloop()
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,18 @@
+# NetDash Applet Requirements
+# 
+# This applet uses only Python standard library modules.
+# No external dependencies are required!
+#
+# Required Python version: 3.7+
+#
+# Standard library modules used:
+# - tkinter (GUI framework - included with most Python installations)
+# - threading (background tasks)
+# - subprocess (execute system commands)
+# - socket (network operations)
+# - ipaddress (IP address handling)
+# - json (data persistence)
+# - datetime (timestamps)
+# - platform (OS detection)
+# - os (file operations)
+# - re (regular expressions)
