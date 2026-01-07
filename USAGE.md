@@ -14,6 +14,18 @@ No installation required! The applet uses only Python's standard library.
 - Python 3.7 or higher
 - tkinter (included with most Python distributions)
 
+**Note:** On some Linux distributions, tkinter needs to be installed separately:
+```bash
+# Debian/Ubuntu
+sudo apt-get install python3-tk
+
+# Fedora/RHEL
+sudo dnf install python3-tkinter
+
+# Arch Linux
+sudo pacman -S tk
+```
+
 **To verify tkinter is available:**
 ```bash
 python -c "import tkinter"

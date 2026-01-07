@@ -324,7 +324,7 @@ class NetDashApplet:
             result = subprocess.run(command, stdout=subprocess.PIPE, 
                                    stderr=subprocess.PIPE, timeout=timeout+1)
             return result.returncode == 0
-        except:
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
             return False
             
     def get_local_ip(self):
@@ -335,7 +335,7 @@ class NetDashApplet:
             local_ip = s.getsockname()[0]
             s.close()
             return local_ip
-        except:
+        except (socket.error, OSError):
             return None
             
     def get_hostname(self, ip):
@@ -343,7 +343,7 @@ class NetDashApplet:
         try:
             hostname = socket.gethostbyaddr(ip)[0]
             return hostname
-        except:
+        except (socket.herror, socket.gaierror, socket.timeout):
             return "Unknown"
             
     def refresh_devices(self):
@@ -602,7 +602,7 @@ class NetDashApplet:
                             open_ports.append(port)
                             msg = f"Port {port}: OPEN\n"
                             self.root.after(0, lambda m=msg: self.port_result.insert(tk.END, m))
-                    except:
+                    except (socket.error, OSError):
                         pass
                         
                 summary = f"\nScan complete. Found {len(open_ports)} open ports\n"
