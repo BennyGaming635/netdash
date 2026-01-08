@@ -15,6 +15,20 @@ import re
 from datetime import datetime
 import json
 import os
+import urllib.request
+import urllib.error
+import ssl
+import tempfile
+import shutil
+import sys
+
+# Application version
+__version__ = "1.0.0"
+GITHUB_REPO = "BennyGaming635/netdash"
+UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+# Update validation constants
+MIN_UPDATE_FILE_SIZE = 1000  # Minimum expected file size in bytes
 
 class NetworkDevice:
     """Represents a network device"""
@@ -24,6 +38,37 @@ class NetworkDevice:
         self.mac = mac
         self.status = status
         self.last_seen = datetime.now()
+        self.manufacturer = self._detect_manufacturer()
+    
+    def _detect_manufacturer(self):
+        """Detect manufacturer based on hostname, MAC, or other characteristics"""
+        hostname_lower = self.hostname.lower()
+        mac_upper = self.mac.upper()
+        
+        # Check hostname patterns
+        if any(x in hostname_lower for x in ['cisco', 'catalyst', 'nexus', 'asa']):
+            return 'cisco'
+        elif any(x in hostname_lower for x in ['unifi', 'ubiquiti', 'uap', 'usw', 'udm']):
+            return 'ubiquiti'
+        elif any(x in hostname_lower for x in ['netgear', 'orbi', 'nighthawk']):
+            return 'netgear'
+        elif any(x in hostname_lower for x in ['tp-link', 'tplink', 'archer', 'deco']):
+            return 'tplink'
+        elif any(x in hostname_lower for x in ['router', 'gateway', 'modem']):
+            return 'router'
+        
+        # Check MAC address OUI (first 6 characters)
+        # Common manufacturer OUIs (selected verified examples)
+        if mac_upper.startswith('00:1B:D5') or mac_upper.startswith('C4:64:13'):
+            return 'cisco'
+        elif mac_upper.startswith('F0:9F:C2') or mac_upper.startswith('74:83:C2'):
+            return 'ubiquiti'
+        elif mac_upper.startswith('A0:40:A0') or mac_upper.startswith('20:E5:2A'):
+            return 'netgear'
+        elif mac_upper.startswith('98:DE:D0') or mac_upper.startswith('A4:2B:B0'):
+            return 'tplink'
+        
+        return 'generic'
 
 class NetDashApplet:
     """Main application class for the network management applet"""
@@ -67,6 +112,8 @@ class NetDashApplet:
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="Check for Updates", command=self.check_for_updates)
+        help_menu.add_separator()
         help_menu.add_command(label="About", command=self.show_about)
         
     def create_main_layout(self):
@@ -157,13 +204,40 @@ class NetDashApplet:
         ttk.Button(control_frame, text="Generate Map", 
                   command=self.generate_network_map).pack(side='left', padx=5)
         
-        # Map display area (text-based for simplicity)
+        # Map display area (GUI-based canvas)
         map_display_frame = ttk.LabelFrame(map_frame, text="Network Topology")
         map_display_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
-        self.map_text = scrolledtext.ScrolledText(map_display_frame, wrap=tk.WORD,
-                                                   font=('Courier', 10))
-        self.map_text.pack(fill='both', expand=True, padx=5, pady=5)
+        # Create canvas with scrollbars
+        canvas_frame = ttk.Frame(map_display_frame)
+        canvas_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        
+        # Scrollbars
+        h_scrollbar = ttk.Scrollbar(canvas_frame, orient='horizontal')
+        h_scrollbar.pack(side='bottom', fill='x')
+        
+        v_scrollbar = ttk.Scrollbar(canvas_frame, orient='vertical')
+        v_scrollbar.pack(side='right', fill='y')
+        
+        # Canvas for drawing network map
+        self.map_canvas = tk.Canvas(canvas_frame, bg='white', 
+                                    xscrollcommand=h_scrollbar.set,
+                                    yscrollcommand=v_scrollbar.set)
+        self.map_canvas.pack(side='left', fill='both', expand=True)
+        
+        h_scrollbar.config(command=self.map_canvas.xview)
+        v_scrollbar.config(command=self.map_canvas.yview)
+        
+        # Bind mouse events for interactivity
+        self.map_canvas.bind('<Button-1>', self.on_map_click)
+        self.map_canvas.bind('<Leave>', self.on_map_leave)
+        
+        # Store device positions and canvas items for interactivity
+        self.device_canvas_items = {}
+        self.device_positions = {}
+        
+        # Tooltip label
+        self.tooltip_label = None
         
     def create_tools_tab(self):
         """Create network tools tab"""
@@ -457,60 +531,432 @@ class NetDashApplet:
                     self.refresh_devices()
                     
     def generate_network_map(self):
-        """Generate a text-based network map"""
-        self.map_text.delete(1.0, tk.END)
+        """Generate a GUI-based network map with visual device representations"""
+        # Clear existing map
+        self.map_canvas.delete('all')
+        self.device_canvas_items.clear()
+        self.device_positions.clear()
         
         subnet = self.subnet_entry.get()
-        self.map_text.insert(tk.END, f"Network Map for {subnet}\n")
-        self.map_text.insert(tk.END, "=" * 80 + "\n\n")
         
         if not self.devices:
-            self.map_text.insert(tk.END, "No devices found. Run a network scan first.\n")
+            self.map_canvas.create_text(400, 300, text="No devices found. Run a network scan first.",
+                                       font=('Arial', 14), fill='gray')
             return
-            
+        
+        # Draw title
+        self.map_canvas.create_text(400, 30, text=f"Network Topology Map - {subnet}",
+                                   font=('Arial', 16, 'bold'), fill='#2c3e50')
+        
+        # Draw Internet and Gateway
+        gateway_x, gateway_y = 400, 100
+        self._draw_internet_gateway(gateway_x, gateway_y)
+        
         # Group devices by status
         online_devices = [d for d in self.devices.values() if d.status == "Online"]
         offline_devices = [d for d in self.devices.values() if d.status != "Online"]
         
-        # Display online devices
-        self.map_text.insert(tk.END, "ONLINE DEVICES:\n")
-        self.map_text.insert(tk.END, "-" * 80 + "\n")
+        # Calculate layout
+        all_display_devices = online_devices + offline_devices
+        num_devices = len(all_display_devices)
         
-        if online_devices:
-            for device in sorted(online_devices, key=lambda x: ipaddress.IPv4Address(x.ip)):
-                self.map_text.insert(tk.END, f"  [{device.ip:15s}] {device.hostname}\n")
-                if device.mac != "Unknown":
-                    self.map_text.insert(tk.END, f"    MAC: {device.mac}\n")
-                self.map_text.insert(tk.END, "\n")
+        if num_devices == 0:
+            return
+        
+        # Layout devices in a grid below the gateway
+        start_y = 250
+        devices_per_row = min(5, max(3, num_devices))
+        spacing_x = 150
+        spacing_y = 180
+        
+        # Calculate starting x position to center the layout
+        total_width = devices_per_row * spacing_x
+        start_x = max(100, (800 - total_width) // 2 + spacing_x // 2)
+        
+        # Draw connection lines from gateway to devices
+        for idx, device in enumerate(all_display_devices):
+            row = idx // devices_per_row
+            col = idx % devices_per_row
+            
+            device_x = start_x + col * spacing_x
+            device_y = start_y + row * spacing_y
+            
+            # Draw line from gateway to device
+            line_color = '#27ae60' if device.status == "Online" else '#95a5a6'
+            self.map_canvas.create_line(gateway_x, gateway_y + 40, device_x, device_y - 40,
+                                       fill=line_color, width=2, dash=(5, 3))
+        
+        # Draw devices
+        for idx, device in enumerate(all_display_devices):
+            row = idx // devices_per_row
+            col = idx % devices_per_row
+            
+            device_x = start_x + col * spacing_x
+            device_y = start_y + row * spacing_y
+            
+            # Draw device with image and label
+            self._draw_device_node(device, device_x, device_y)
+        
+        # Update scroll region
+        self.map_canvas.configure(scrollregion=self.map_canvas.bbox('all'))
+        
+        self.log("Generated GUI-based network map")
+    
+    def _draw_internet_gateway(self, x, y):
+        """Draw the Internet and Gateway/Router representation"""
+        # Draw Internet cloud (top)
+        cloud_y = y - 80
+        self._draw_cloud(x, cloud_y, 'Internet', '#3498db')
+        
+        # Draw connection line
+        self.map_canvas.create_line(x, cloud_y + 25, x, y - 40,
+                                   fill='#2c3e50', width=3)
+        
+        # Draw Gateway/Router
+        self._draw_router_device(x, y, 'Gateway/Router', '#e74c3c')
+    
+    def _draw_cloud(self, x, y, label, color):
+        """Draw a cloud shape to represent Internet"""
+        # Simple cloud using ovals
+        self.map_canvas.create_oval(x - 40, y - 15, x - 10, y + 15, fill=color, outline=color)
+        self.map_canvas.create_oval(x - 20, y - 20, x + 20, y + 10, fill=color, outline=color)
+        self.map_canvas.create_oval(x + 10, y - 15, x + 40, y + 15, fill=color, outline=color)
+        
+        # Label
+        self.map_canvas.create_text(x, y + 35, text=label, font=('Arial', 10, 'bold'),
+                                   fill='#2c3e50')
+    
+    def _draw_router_device(self, x, y, label, color):
+        """Draw a router device representation"""
+        # Router body (rectangle with antenna)
+        self.map_canvas.create_rectangle(x - 30, y - 20, x + 30, y + 20,
+                                        fill=color, outline='#c0392b', width=2)
+        
+        # Antenna
+        self.map_canvas.create_line(x - 15, y - 20, x - 15, y - 35, fill='#2c3e50', width=2)
+        self.map_canvas.create_oval(x - 18, y - 40, x - 12, y - 34, fill='#2c3e50', outline='#2c3e50')
+        
+        self.map_canvas.create_line(x + 15, y - 20, x + 15, y - 35, fill='#2c3e50', width=2)
+        self.map_canvas.create_oval(x + 12, y - 40, x + 18, y - 34, fill='#2c3e50', outline='#2c3e50')
+        
+        # LED indicators
+        for i in range(3):
+            self.map_canvas.create_oval(x - 15 + i * 15, y - 5, x - 10 + i * 15, y,
+                                       fill='#2ecc71', outline='#27ae60')
+        
+        # Label
+        self.map_canvas.create_text(x, y + 35, text=label, font=('Arial', 9, 'bold'),
+                                   fill='#2c3e50')
+    
+    def _draw_device_node(self, device, x, y):
+        """Draw a device node with manufacturer-specific icon and label"""
+        # Get manufacturer-specific colors and icon
+        manufacturer = device.manufacturer
+        icon_color = self._get_manufacturer_color(manufacturer)
+        
+        # Draw device icon based on manufacturer
+        items = []
+        if manufacturer == 'cisco':
+            items = self._draw_cisco_icon(x, y, icon_color, device.status)
+        elif manufacturer == 'ubiquiti':
+            items = self._draw_ubiquiti_icon(x, y, icon_color, device.status)
+        elif manufacturer == 'netgear':
+            items = self._draw_netgear_icon(x, y, icon_color, device.status)
+        elif manufacturer == 'tplink':
+            items = self._draw_tplink_icon(x, y, icon_color, device.status)
+        elif manufacturer == 'router':
+            items = self._draw_router_icon(x, y, icon_color, device.status)
         else:
-            self.map_text.insert(tk.END, "  No online devices\n\n")
-            
-        # Display offline devices
-        if offline_devices:
-            self.map_text.insert(tk.END, "\nOFFLINE DEVICES:\n")
-            self.map_text.insert(tk.END, "-" * 80 + "\n")
-            for device in sorted(offline_devices, key=lambda x: ipaddress.IPv4Address(x.ip)):
-                self.map_text.insert(tk.END, f"  [{device.ip:15s}] {device.hostname}\n")
-                self.map_text.insert(tk.END, "\n")
-                
-        # Network topology diagram
-        self.map_text.insert(tk.END, "\nNETWORK TOPOLOGY:\n")
-        self.map_text.insert(tk.END, "-" * 80 + "\n")
-        self.map_text.insert(tk.END, "\n")
-        self.map_text.insert(tk.END, "                    [Internet]\n")
-        self.map_text.insert(tk.END, "                         |\n")
-        self.map_text.insert(tk.END, "                    [Router/Gateway]\n")
-        self.map_text.insert(tk.END, "                         |\n")
-        self.map_text.insert(tk.END, "          _______________│_______________\n")
-        self.map_text.insert(tk.END, "         |               |               |\n")
+            items = self._draw_generic_icon(x, y, icon_color, device.status)
         
-        # Show some devices in the topology
-        for idx, device in enumerate(list(online_devices)[:3], 1):
-            spaces = " " * (10 + (idx-1) * 20)
-            self.map_text.insert(tk.END, f"{spaces}[{device.hostname[:15]}]\n")
-            self.map_text.insert(tk.END, f"{spaces} {device.ip}\n")
+        # Draw device labels
+        # Hostname
+        hostname_text = device.hostname if device.hostname != "Unknown" else "Unknown Device"
+        if len(hostname_text) > 15:
+            hostname_text = hostname_text[:12] + "..."
+        
+        text_item = self.map_canvas.create_text(x, y + 45, text=hostname_text,
+                                               font=('Arial', 9, 'bold'),
+                                               fill='#2c3e50')
+        items.append(text_item)
+        
+        # IP address
+        ip_item = self.map_canvas.create_text(x, y + 60, text=device.ip,
+                                             font=('Arial', 8),
+                                             fill='#7f8c8d')
+        items.append(ip_item)
+        
+        # Status indicator
+        status_color = '#27ae60' if device.status == "Online" else '#95a5a6'
+        status_item = self.map_canvas.create_oval(x + 35, y - 35, x + 45, y - 25,
+                                                 fill=status_color, outline=status_color)
+        items.append(status_item)
+        
+        # Store device info for interactivity
+        self.device_canvas_items[device.ip] = items
+        self.device_positions[device.ip] = (x, y, device)
+        
+        # Bind events to all items
+        for item in items:
+            self.map_canvas.tag_bind(item, '<Enter>', lambda e, d=device: self._on_device_hover_enter(e, d))
+            self.map_canvas.tag_bind(item, '<Leave>', lambda e: self._on_device_hover_leave(e))
+            self.map_canvas.tag_bind(item, '<Button-1>', lambda e, d=device: self._on_device_click(e, d))
+    
+    def _get_manufacturer_color(self, manufacturer):
+        """Get color scheme for manufacturer"""
+        colors = {
+            'cisco': '#049fd9',      # Cisco blue
+            'ubiquiti': '#0572d4',   # Ubiquiti blue
+            'netgear': '#fdb714',    # Netgear yellow
+            'tplink': '#009cde',     # TP-Link blue
+            'router': '#e74c3c',     # Red for routers
+            'generic': '#95a5a6'     # Gray for generic
+        }
+        return colors.get(manufacturer, '#95a5a6')
+    
+    def _draw_cisco_icon(self, x, y, color, status):
+        """Draw Cisco device icon"""
+        items = []
+        # Cisco-style rack mount device
+        opacity = 1.0 if status == "Online" else 0.5
+        
+        # Main body
+        rect = self.map_canvas.create_rectangle(x - 30, y - 25, x + 30, y + 25,
+                                               fill=color, outline='#2c3e50', width=2)
+        items.append(rect)
+        
+        # Cisco stripes pattern
+        for i in range(3):
+            line = self.map_canvas.create_line(x - 25 + i * 8, y - 20,
+                                              x - 25 + i * 8, y + 20,
+                                              fill='white', width=2)
+            items.append(line)
+        
+        # Front panel LEDs
+        for i in range(4):
+            led = self.map_canvas.create_rectangle(x - 20 + i * 12, y + 15,
+                                                  x - 15 + i * 12, y + 20,
+                                                  fill='#2ecc71' if status == "Online" else '#7f8c8d',
+                                                  outline='#2c3e50')
+            items.append(led)
+        
+        return items
+    
+    def _draw_ubiquiti_icon(self, x, y, color, status):
+        """Draw Ubiquiti/UniFi device icon"""
+        items = []
+        
+        # UniFi access point style - circular
+        circle = self.map_canvas.create_oval(x - 28, y - 28, x + 28, y + 28,
+                                            fill=color, outline='#2c3e50', width=2)
+        items.append(circle)
+        
+        # UniFi logo pattern (simplified U shape)
+        arc = self.map_canvas.create_arc(x - 15, y - 15, x + 15, y + 15,
+                                        start=180, extent=180,
+                                        outline='white', width=4, style='arc')
+        items.append(arc)
+        
+        # LED ring indicator
+        if status == "Online":
+            led_ring = self.map_canvas.create_oval(x - 22, y - 22, x + 22, y + 22,
+                                                  outline='#2ecc71', width=2)
+            items.append(led_ring)
+        
+        return items
+    
+    def _draw_netgear_icon(self, x, y, color, status):
+        """Draw Netgear device icon"""
+        items = []
+        
+        # Netgear router/switch style
+        rect = self.map_canvas.create_rectangle(x - 32, y - 22, x + 32, y + 22,
+                                               fill=color, outline='#2c3e50', width=2)
+        items.append(rect)
+        
+        # Netgear logo stripe
+        stripe = self.map_canvas.create_rectangle(x - 32, y - 10, x + 32, y,
+                                                 fill='#2c3e50', outline='')
+        items.append(stripe)
+        
+        # Port indicators
+        for i in range(5):
+            port = self.map_canvas.create_rectangle(x - 25 + i * 11, y + 10,
+                                                   x - 20 + i * 11, y + 17,
+                                                   fill='#2c3e50', outline='#2c3e50')
+            items.append(port)
             
-        self.log("Generated network map")
+            if status == "Online":
+                led = self.map_canvas.create_oval(x - 24 + i * 11, y + 5,
+                                                 x - 21 + i * 11, y + 8,
+                                                 fill='#2ecc71', outline='#2ecc71')
+                items.append(led)
+        
+        return items
+    
+    def _draw_tplink_icon(self, x, y, color, status):
+        """Draw TP-Link device icon"""
+        items = []
+        
+        # TP-Link router with antennas
+        body = self.map_canvas.create_rectangle(x - 28, y - 18, x + 28, y + 22,
+                                               fill=color, outline='#2c3e50', width=2)
+        items.append(body)
+        
+        # Antennas
+        ant1 = self.map_canvas.create_line(x - 20, y - 18, x - 25, y - 32,
+                                          fill='#2c3e50', width=3)
+        items.append(ant1)
+        
+        ant2 = self.map_canvas.create_line(x + 20, y - 18, x + 25, y - 32,
+                                          fill='#2c3e50', width=3)
+        items.append(ant2)
+        
+        # Logo area
+        logo = self.map_canvas.create_rectangle(x - 15, y - 10, x + 15, y + 5,
+                                               fill='white', outline='')
+        items.append(logo)
+        
+        # Power LED
+        if status == "Online":
+            led = self.map_canvas.create_oval(x - 5, y + 10, x + 5, y + 18,
+                                             fill='#2ecc71', outline='#27ae60')
+            items.append(led)
+        
+        return items
+    
+    def _draw_router_icon(self, x, y, color, status):
+        """Draw generic router icon"""
+        items = []
+        
+        # Router body
+        body = self.map_canvas.create_rectangle(x - 30, y - 20, x + 30, y + 20,
+                                               fill=color, outline='#2c3e50', width=2)
+        items.append(body)
+        
+        # Single antenna
+        ant = self.map_canvas.create_line(x, y - 20, x, y - 35,
+                                         fill='#2c3e50', width=3)
+        items.append(ant)
+        
+        tip = self.map_canvas.create_oval(x - 3, y - 40, x + 3, y - 34,
+                                         fill='#2c3e50', outline='#2c3e50')
+        items.append(tip)
+        
+        # LEDs
+        if status == "Online":
+            for i in range(3):
+                led = self.map_canvas.create_oval(x - 15 + i * 15, y - 5,
+                                                 x - 10 + i * 15, y,
+                                                 fill='#2ecc71', outline='#27ae60')
+                items.append(led)
+        
+        return items
+    
+    def _draw_generic_icon(self, x, y, color, status):
+        """Draw generic device icon"""
+        items = []
+        
+        # Generic computer/device
+        # Monitor
+        monitor = self.map_canvas.create_rectangle(x - 25, y - 25, x + 25, y + 15,
+                                                  fill=color, outline='#2c3e50', width=2)
+        items.append(monitor)
+        
+        # Screen
+        screen = self.map_canvas.create_rectangle(x - 20, y - 20, x + 20, y + 10,
+                                                 fill='#34495e', outline='')
+        items.append(screen)
+        
+        # Stand
+        stand = self.map_canvas.create_rectangle(x - 5, y + 15, x + 5, y + 25,
+                                               fill='#2c3e50', outline='')
+        items.append(stand)
+        
+        # Base
+        base = self.map_canvas.create_rectangle(x - 15, y + 25, x + 15, y + 30,
+                                               fill='#2c3e50', outline='')
+        items.append(base)
+        
+        # Power indicator
+        if status == "Online":
+            led = self.map_canvas.create_oval(x + 18, y + 8, x + 23, y + 13,
+                                             fill='#2ecc71', outline='#27ae60')
+            items.append(led)
+        
+        return items
+    
+    def _on_device_hover_enter(self, event, device):
+        """Handle mouse entering device area"""
+        # Highlight device
+        if device.ip in self.device_canvas_items:
+            for item in self.device_canvas_items[device.ip]:
+                try:
+                    self.map_canvas.itemconfig(item, width=3)
+                except (tk.TclError, AttributeError):
+                    pass  # Text items and some shapes don't have width property
+        
+        # Show tooltip
+        self._show_tooltip(event.x_root, event.y_root, device)
+    
+    def _on_device_hover_leave(self, event):
+        """Handle mouse leaving device area"""
+        # Remove highlight from all devices
+        for items in self.device_canvas_items.values():
+            for item in items:
+                try:
+                    self.map_canvas.itemconfig(item, width=2)
+                except (tk.TclError, AttributeError):
+                    pass  # Text items and some shapes don't have width property
+        
+        # Hide tooltip
+        self._hide_tooltip()
+    
+    def _on_device_click(self, event, device):
+        """Handle device click to show detailed information"""
+        info_text = f"""Device Information
+
+IP Address: {device.ip}
+Hostname: {device.hostname}
+MAC Address: {device.mac}
+Status: {device.status}
+Manufacturer: {device.manufacturer.upper()}
+Last Seen: {device.last_seen.strftime('%Y-%m-%d %H:%M:%S')}"""
+        
+        messagebox.showinfo(f"Device: {device.hostname}", info_text)
+        self.log(f"Clicked on device: {device.ip} ({device.hostname})")
+    
+    def _show_tooltip(self, x, y, device):
+        """Show tooltip with device information"""
+        self._hide_tooltip()
+        
+        tooltip_text = f"{device.hostname}\n{device.ip}\n{device.manufacturer.upper()}"
+        
+        # Create tooltip window
+        self.tooltip_label = tk.Toplevel(self.root)
+        self.tooltip_label.wm_overrideredirect(True)
+        self.tooltip_label.wm_geometry(f"+{x + 10}+{y + 10}")
+        
+        label = tk.Label(self.tooltip_label, text=tooltip_text,
+                        background="#ffffe0", relief='solid',
+                        borderwidth=1, font=('Arial', 9),
+                        justify='left', padx=5, pady=3)
+        label.pack()
+    
+    def _hide_tooltip(self):
+        """Hide tooltip"""
+        if self.tooltip_label:
+            self.tooltip_label.destroy()
+            self.tooltip_label = None
+    
+    def on_map_click(self, event):
+        """Handle click on map canvas"""
+        # Hide tooltip on background click
+        self._hide_tooltip()
+    
+    def on_map_leave(self, event):
+        """Handle mouse leaving map canvas"""
+        self._hide_tooltip()
         
     def run_ping_tool(self):
         """Run ping tool"""
@@ -670,10 +1116,239 @@ class NetDashApplet:
             self.devices.clear()
             self.refresh_devices()
             self.log("All devices cleared")
+    
+    def check_for_updates(self):
+        """Check for application updates"""
+        self.log("Checking for updates...")
+        
+        def check_update_thread():
+            try:
+                # Create SSL context with proper certificate verification
+                context = ssl.create_default_context()
+                
+                # Fetch latest release info from GitHub
+                req = urllib.request.Request(UPDATE_CHECK_URL)
+                req.add_header('User-Agent', f'NetDash/{__version__}')
+                
+                try:
+                    with urllib.request.urlopen(req, context=context, timeout=10) as response:
+                        data = json.loads(response.read().decode())
+                except ssl.SSLError as ssl_err:
+                    # If SSL verification fails, inform user
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Update Check Failed",
+                        f"SSL certificate verification failed.\n\nThis could indicate a security issue or network configuration problem.\n\nError: {str(ssl_err)}"
+                    ))
+                    self.log(f"SSL verification failed: {str(ssl_err)}")
+                    return
+                
+                latest_version = data['tag_name'].lstrip('v')
+                current_version = __version__
+                
+                self.log(f"Current version: {current_version}")
+                self.log(f"Latest version: {latest_version}")
+                
+                if self._is_newer_version(latest_version, current_version):
+                    # New version available
+                    download_url = None
+                    file_hash = None
+                    
+                    # Find the Python script in assets
+                    for asset in data.get('assets', []):
+                        if asset['name'] == 'netdash_applet.py':
+                            download_url = asset['browser_download_url']
+                            break
+                    
+                    if not download_url:
+                        # No asset found - cannot proceed safely
+                        self.root.after(0, lambda: messagebox.showwarning(
+                            "Update Not Available",
+                            f"Update to version {latest_version} is available on GitHub,\nbut the release assets are not configured for automatic updates.\n\nPlease visit GitHub to download manually."
+                        ))
+                        self.log("Update available but no asset found for auto-update")
+                        return
+                    
+                    release_notes = data.get('body', 'No release notes available.')
+                    
+                    self.root.after(0, lambda: self._prompt_update(latest_version, download_url, release_notes))
+                else:
+                    # Already up to date
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Up to Date",
+                        f"You are running the latest version ({current_version})."
+                    ))
+                    self.log("Application is up to date")
+                    
+            except urllib.error.URLError as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Check Failed",
+                    f"Could not check for updates.\n\nError: {str(e)}\n\nPlease check your internet connection."
+                ))
+                self.log(f"Update check failed: {str(e)}")
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Check Failed",
+                    f"An error occurred while checking for updates.\n\nError: {str(e)}"
+                ))
+                self.log(f"Update check error: {str(e)}")
+        
+        # Run check in background thread
+        thread = threading.Thread(target=check_update_thread, daemon=True)
+        thread.start()
+    
+    def _is_newer_version(self, latest, current):
+        """Compare version strings"""
+        try:
+            latest_parts = [int(x) for x in latest.split('.')]
+            current_parts = [int(x) for x in current.split('.')]
+            
+            # Pad with zeros if needed
+            while len(latest_parts) < 3:
+                latest_parts.append(0)
+            while len(current_parts) < 3:
+                current_parts.append(0)
+            
+            return latest_parts > current_parts
+        except (ValueError, AttributeError):
+            return False
+    
+    def _prompt_update(self, new_version, download_url, release_notes):
+        """Prompt user to install update"""
+        # Truncate release notes if too long
+        if len(release_notes) > 300:
+            release_notes = release_notes[:300] + "..."
+        
+        message = f"""A new version of NetDash is available!
+
+Current Version: {__version__}
+New Version: {new_version}
+
+Release Notes:
+{release_notes}
+
+Would you like to download and install the update?
+
+Note: The application will restart after the update."""
+        
+        if messagebox.askyesno("Update Available", message):
+            self.log(f"User accepted update to version {new_version}")
+            self._download_and_install_update(download_url)
+        else:
+            self.log("User declined update")
+    
+    def _download_and_install_update(self, download_url):
+        """Download and install the update"""
+        self.log(f"Downloading update from {download_url}")
+        
+        def download_thread():
+            try:
+                # Create SSL context with proper certificate verification
+                context = ssl.create_default_context()
+                
+                # Show progress message
+                self.root.after(0, lambda: self.log("Downloading update..."))
+                
+                # Download the new version
+                req = urllib.request.Request(download_url)
+                req.add_header('User-Agent', f'NetDash/{__version__}')
+                
+                try:
+                    with urllib.request.urlopen(req, context=context, timeout=30) as response:
+                        new_content = response.read()
+                except ssl.SSLError as ssl_err:
+                    self.log(f"SSL verification failed during download: {str(ssl_err)}")
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Download Failed",
+                        f"SSL certificate verification failed during download.\n\nThis could indicate a security issue.\n\nError: {str(ssl_err)}"
+                    ))
+                    return
+                
+                # Basic validation: check if downloaded content looks like Python code
+                if not new_content or len(new_content) < MIN_UPDATE_FILE_SIZE:
+                    raise ValueError("Downloaded file is too small or empty")
+                
+                # Validate Python content by checking for expected imports
+                content_start = new_content[:500].decode('utf-8', errors='ignore')
+                expected_indicators = [
+                    '#!/usr/bin/env python',
+                    'import tkinter',
+                    'class NetworkDevice',
+                    'class NetDashApplet'
+                ]
+                if not any(indicator in content_start for indicator in expected_indicators):
+                    raise ValueError("Downloaded file does not appear to be the NetDash application")
+                
+                # Get the current script path (absolute)
+                current_script = os.path.abspath(__file__)
+                
+                # Create a backup of the current version
+                backup_path = current_script + '.backup'
+                shutil.copy2(current_script, backup_path)
+                self.log(f"Created backup at {backup_path}")
+                
+                # Write the new version
+                with open(current_script, 'wb') as f:
+                    f.write(new_content)
+                
+                self.log("Update downloaded and installed successfully")
+                
+                # Prompt to restart
+                self.root.after(0, lambda: self._prompt_restart())
+                
+            except ValueError as ve:
+                self.log(f"Update validation failed: {str(ve)}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Downloaded file failed validation.\n\nError: {str(ve)}\n\nThe update was not installed. Your current version is unchanged."
+                ))
+            except Exception as e:
+                self.log(f"Update failed: {str(e)}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Failed to download or install update.\n\nError: {str(e)}\n\nPlease try again later or download manually from GitHub."
+                ))
+        
+        # Run download in background thread
+        thread = threading.Thread(target=download_thread, daemon=True)
+        thread.start()
+    
+    def _prompt_restart(self):
+        """Prompt user to restart the application"""
+        if messagebox.askyesno(
+            "Update Complete",
+            "Update installed successfully!\n\nThe application needs to restart to apply the changes.\n\nRestart now?"
+        ):
+            self.log("Restarting application...")
+            try:
+                # Get absolute path to script and Python interpreter
+                script_path = os.path.abspath(__file__)
+                python = sys.executable
+                
+                # Use subprocess for more reliable restart (imported at module level)
+                subprocess.Popen([python, script_path], 
+                               cwd=os.path.dirname(script_path),
+                               start_new_session=True if platform.system() != 'Windows' else False)
+                
+                # Exit current instance
+                self.root.quit()
+                self.root.destroy()
+                sys.exit(0)
+            except Exception as e:
+                self.log(f"Restart failed: {str(e)}")
+                messagebox.showerror(
+                    "Restart Failed",
+                    f"Could not automatically restart.\n\nError: {str(e)}\n\nPlease close and restart the application manually."
+                )
+        else:
+            self.log("Application restart postponed")
+            messagebox.showinfo(
+                "Restart Required",
+                "Please restart the application to use the new version."
+            )
             
     def show_about(self):
         """Show about dialog"""
-        about_text = """NetDash Applet v1.0
+        about_text = f"""NetDash Applet v{__version__}
 
 A simple network management tool for:
 - Network scanning and discovery
