@@ -44,8 +44,8 @@ class NetworkDevice:
             return 'router'
         
         # Check MAC address OUI (first 6 characters)
-        # Common manufacturer OUIs
-        if mac_upper.startswith('00:0C:29') or mac_upper.startswith('00:50:56'):
+        # Common manufacturer OUIs (selected verified examples)
+        if mac_upper.startswith('00:1B:D5') or mac_upper.startswith('C4:64:13'):
             return 'cisco'
         elif mac_upper.startswith('F0:9F:C2') or mac_upper.startswith('74:83:C2'):
             return 'ubiquiti'
@@ -213,7 +213,6 @@ class NetDashApplet:
         v_scrollbar.config(command=self.map_canvas.yview)
         
         # Bind mouse events for interactivity
-        self.map_canvas.bind('<Motion>', self.on_map_hover)
         self.map_canvas.bind('<Button-1>', self.on_map_click)
         self.map_canvas.bind('<Leave>', self.on_map_leave)
         
@@ -876,7 +875,10 @@ class NetDashApplet:
         # Highlight device
         if device.ip in self.device_canvas_items:
             for item in self.device_canvas_items[device.ip]:
-                self.map_canvas.itemconfig(item, width=3)
+                try:
+                    self.map_canvas.itemconfig(item, width=3)
+                except (tk.TclError, AttributeError):
+                    pass  # Text items and some shapes don't have width property
         
         # Show tooltip
         self._show_tooltip(event.x_root, event.y_root, device)
@@ -888,8 +890,8 @@ class NetDashApplet:
             for item in items:
                 try:
                     self.map_canvas.itemconfig(item, width=2)
-                except:
-                    pass  # Text items don't have width
+                except (tk.TclError, AttributeError):
+                    pass  # Text items and some shapes don't have width property
         
         # Hide tooltip
         self._hide_tooltip()
@@ -930,11 +932,6 @@ Last Seen: {device.last_seen.strftime('%Y-%m-%d %H:%M:%S')}"""
         if self.tooltip_label:
             self.tooltip_label.destroy()
             self.tooltip_label = None
-    
-    def on_map_hover(self, event):
-        """Handle mouse hover over map"""
-        # This is handled by individual device bindings
-        pass
     
     def on_map_click(self, event):
         """Handle click on map canvas"""
