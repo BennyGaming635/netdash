@@ -15,6 +15,17 @@ import re
 from datetime import datetime
 import json
 import os
+import urllib.request
+import urllib.error
+import ssl
+import tempfile
+import shutil
+import sys
+
+# Application version
+__version__ = "1.0.0"
+GITHUB_REPO = "BennyGaming635/netdash"
+UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 class NetworkDevice:
     """Represents a network device"""
@@ -98,6 +109,8 @@ class NetDashApplet:
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="Check for Updates", command=self.check_for_updates)
+        help_menu.add_separator()
         help_menu.add_command(label="About", command=self.show_about)
         
     def create_main_layout(self):
@@ -1100,10 +1113,182 @@ Last Seen: {device.last_seen.strftime('%Y-%m-%d %H:%M:%S')}"""
             self.devices.clear()
             self.refresh_devices()
             self.log("All devices cleared")
+    
+    def check_for_updates(self):
+        """Check for application updates"""
+        self.log("Checking for updates...")
+        
+        def check_update_thread():
+            try:
+                # Create SSL context that doesn't verify certificates (for compatibility)
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                
+                # Fetch latest release info from GitHub
+                req = urllib.request.Request(UPDATE_CHECK_URL)
+                req.add_header('User-Agent', f'NetDash/{__version__}')
+                
+                with urllib.request.urlopen(req, context=context, timeout=10) as response:
+                    data = json.loads(response.read().decode())
+                    
+                    latest_version = data['tag_name'].lstrip('v')
+                    current_version = __version__
+                    
+                    self.log(f"Current version: {current_version}")
+                    self.log(f"Latest version: {latest_version}")
+                    
+                    if self._is_newer_version(latest_version, current_version):
+                        # New version available
+                        download_url = None
+                        
+                        # Find the Python script in assets
+                        for asset in data.get('assets', []):
+                            if asset['name'] == 'netdash_applet.py':
+                                download_url = asset['browser_download_url']
+                                break
+                        
+                        if not download_url:
+                            # Fallback to raw file from the release tag
+                            download_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{data['tag_name']}/netdash_applet.py"
+                        
+                        release_notes = data.get('body', 'No release notes available.')
+                        
+                        self.root.after(0, lambda: self._prompt_update(latest_version, download_url, release_notes))
+                    else:
+                        # Already up to date
+                        self.root.after(0, lambda: messagebox.showinfo(
+                            "Up to Date",
+                            f"You are running the latest version ({current_version})."
+                        ))
+                        self.log("Application is up to date")
+                        
+            except urllib.error.URLError as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Check Failed",
+                    f"Could not check for updates.\n\nError: {str(e)}\n\nPlease check your internet connection."
+                ))
+                self.log(f"Update check failed: {str(e)}")
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Check Failed",
+                    f"An error occurred while checking for updates.\n\nError: {str(e)}"
+                ))
+                self.log(f"Update check error: {str(e)}")
+        
+        # Run check in background thread
+        thread = threading.Thread(target=check_update_thread, daemon=True)
+        thread.start()
+    
+    def _is_newer_version(self, latest, current):
+        """Compare version strings"""
+        try:
+            latest_parts = [int(x) for x in latest.split('.')]
+            current_parts = [int(x) for x in current.split('.')]
+            
+            # Pad with zeros if needed
+            while len(latest_parts) < 3:
+                latest_parts.append(0)
+            while len(current_parts) < 3:
+                current_parts.append(0)
+            
+            return latest_parts > current_parts
+        except (ValueError, AttributeError):
+            return False
+    
+    def _prompt_update(self, new_version, download_url, release_notes):
+        """Prompt user to install update"""
+        # Truncate release notes if too long
+        if len(release_notes) > 300:
+            release_notes = release_notes[:300] + "..."
+        
+        message = f"""A new version of NetDash is available!
+
+Current Version: {__version__}
+New Version: {new_version}
+
+Release Notes:
+{release_notes}
+
+Would you like to download and install the update?
+
+Note: The application will restart after the update."""
+        
+        if messagebox.askyesno("Update Available", message):
+            self.log(f"User accepted update to version {new_version}")
+            self._download_and_install_update(download_url)
+        else:
+            self.log("User declined update")
+    
+    def _download_and_install_update(self, download_url):
+        """Download and install the update"""
+        self.log(f"Downloading update from {download_url}")
+        
+        def download_thread():
+            try:
+                # Create SSL context
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                
+                # Show progress message
+                self.root.after(0, lambda: self.log("Downloading update..."))
+                
+                # Download the new version
+                req = urllib.request.Request(download_url)
+                req.add_header('User-Agent', f'NetDash/{__version__}')
+                
+                with urllib.request.urlopen(req, context=context, timeout=30) as response:
+                    new_content = response.read()
+                
+                # Get the current script path
+                current_script = os.path.abspath(__file__)
+                
+                # Create a backup of the current version
+                backup_path = current_script + '.backup'
+                shutil.copy2(current_script, backup_path)
+                self.log(f"Created backup at {backup_path}")
+                
+                # Write the new version
+                with open(current_script, 'wb') as f:
+                    f.write(new_content)
+                
+                self.log("Update downloaded and installed successfully")
+                
+                # Prompt to restart
+                self.root.after(0, lambda: self._prompt_restart())
+                
+            except Exception as e:
+                self.log(f"Update failed: {str(e)}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Failed to download or install update.\n\nError: {str(e)}\n\nPlease try again later or download manually from GitHub."
+                ))
+        
+        # Run download in background thread
+        thread = threading.Thread(target=download_thread, daemon=True)
+        thread.start()
+    
+    def _prompt_restart(self):
+        """Prompt user to restart the application"""
+        if messagebox.askyesno(
+            "Update Complete",
+            "Update installed successfully!\n\nThe application needs to restart to apply the changes.\n\nRestart now?"
+        ):
+            self.log("Restarting application...")
+            # Restart the application
+            python = sys.executable
+            os.execl(python, python, *sys.argv)
+        else:
+            self.log("Application restart postponed")
+            messagebox.showinfo(
+                "Restart Required",
+                "Please restart the application to use the new version."
+            )
             
     def show_about(self):
         """Show about dialog"""
-        about_text = """NetDash Applet v1.0
+        about_text = f"""NetDash Applet v{__version__}
 
 A simple network management tool for:
 - Network scanning and discovery
