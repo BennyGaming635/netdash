@@ -27,6 +27,9 @@ __version__ = "1.0.0"
 GITHUB_REPO = "BennyGaming635/netdash"
 UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
+# Update validation constants
+MIN_UPDATE_FILE_SIZE = 1000  # Minimum expected file size in bytes
+
 class NetworkDevice:
     """Represents a network device"""
     def __init__(self, ip, hostname="Unknown", mac="Unknown", status="Unknown"):
@@ -1261,13 +1264,19 @@ Note: The application will restart after the update."""
                     return
                 
                 # Basic validation: check if downloaded content looks like Python code
-                if not new_content or len(new_content) < 1000:
+                if not new_content or len(new_content) < MIN_UPDATE_FILE_SIZE:
                     raise ValueError("Downloaded file is too small or empty")
                 
-                # Check for Python shebang or import statements
+                # Validate Python content by checking for expected imports
                 content_start = new_content[:500].decode('utf-8', errors='ignore')
-                if not ('#!/usr/bin/env python' in content_start or 'import' in content_start):
-                    raise ValueError("Downloaded file does not appear to be a Python script")
+                expected_indicators = [
+                    '#!/usr/bin/env python',
+                    'import tkinter',
+                    'class NetworkDevice',
+                    'class NetDashApplet'
+                ]
+                if not any(indicator in content_start for indicator in expected_indicators):
+                    raise ValueError("Downloaded file does not appear to be the NetDash application")
                 
                 # Get the current script path (absolute)
                 current_script = os.path.abspath(__file__)
@@ -1315,8 +1324,7 @@ Note: The application will restart after the update."""
                 script_path = os.path.abspath(__file__)
                 python = sys.executable
                 
-                # Use subprocess for more reliable restart
-                import subprocess
+                # Use subprocess for more reliable restart (imported at module level)
                 subprocess.Popen([python, script_path], 
                                cwd=os.path.dirname(script_path),
                                start_new_session=True if platform.system() != 'Windows' else False)
