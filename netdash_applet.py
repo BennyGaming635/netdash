@@ -1120,49 +1120,62 @@ Last Seen: {device.last_seen.strftime('%Y-%m-%d %H:%M:%S')}"""
         
         def check_update_thread():
             try:
-                # Create SSL context that doesn't verify certificates (for compatibility)
+                # Create SSL context with proper certificate verification
                 context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
                 
                 # Fetch latest release info from GitHub
                 req = urllib.request.Request(UPDATE_CHECK_URL)
                 req.add_header('User-Agent', f'NetDash/{__version__}')
                 
-                with urllib.request.urlopen(req, context=context, timeout=10) as response:
-                    data = json.loads(response.read().decode())
+                try:
+                    with urllib.request.urlopen(req, context=context, timeout=10) as response:
+                        data = json.loads(response.read().decode())
+                except ssl.SSLError as ssl_err:
+                    # If SSL verification fails, inform user
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Update Check Failed",
+                        f"SSL certificate verification failed.\n\nThis could indicate a security issue or network configuration problem.\n\nError: {str(ssl_err)}"
+                    ))
+                    self.log(f"SSL verification failed: {str(ssl_err)}")
+                    return
+                
+                latest_version = data['tag_name'].lstrip('v')
+                current_version = __version__
+                
+                self.log(f"Current version: {current_version}")
+                self.log(f"Latest version: {latest_version}")
+                
+                if self._is_newer_version(latest_version, current_version):
+                    # New version available
+                    download_url = None
+                    file_hash = None
                     
-                    latest_version = data['tag_name'].lstrip('v')
-                    current_version = __version__
+                    # Find the Python script in assets
+                    for asset in data.get('assets', []):
+                        if asset['name'] == 'netdash_applet.py':
+                            download_url = asset['browser_download_url']
+                            break
                     
-                    self.log(f"Current version: {current_version}")
-                    self.log(f"Latest version: {latest_version}")
-                    
-                    if self._is_newer_version(latest_version, current_version):
-                        # New version available
-                        download_url = None
-                        
-                        # Find the Python script in assets
-                        for asset in data.get('assets', []):
-                            if asset['name'] == 'netdash_applet.py':
-                                download_url = asset['browser_download_url']
-                                break
-                        
-                        if not download_url:
-                            # Fallback to raw file from the release tag
-                            download_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{data['tag_name']}/netdash_applet.py"
-                        
-                        release_notes = data.get('body', 'No release notes available.')
-                        
-                        self.root.after(0, lambda: self._prompt_update(latest_version, download_url, release_notes))
-                    else:
-                        # Already up to date
-                        self.root.after(0, lambda: messagebox.showinfo(
-                            "Up to Date",
-                            f"You are running the latest version ({current_version})."
+                    if not download_url:
+                        # No asset found - cannot proceed safely
+                        self.root.after(0, lambda: messagebox.showwarning(
+                            "Update Not Available",
+                            f"Update to version {latest_version} is available on GitHub,\nbut the release assets are not configured for automatic updates.\n\nPlease visit GitHub to download manually."
                         ))
-                        self.log("Application is up to date")
-                        
+                        self.log("Update available but no asset found for auto-update")
+                        return
+                    
+                    release_notes = data.get('body', 'No release notes available.')
+                    
+                    self.root.after(0, lambda: self._prompt_update(latest_version, download_url, release_notes))
+                else:
+                    # Already up to date
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Up to Date",
+                        f"You are running the latest version ({current_version})."
+                    ))
+                    self.log("Application is up to date")
+                    
             except urllib.error.URLError as e:
                 self.root.after(0, lambda: messagebox.showerror(
                     "Update Check Failed",
@@ -1226,10 +1239,8 @@ Note: The application will restart after the update."""
         
         def download_thread():
             try:
-                # Create SSL context
+                # Create SSL context with proper certificate verification
                 context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
                 
                 # Show progress message
                 self.root.after(0, lambda: self.log("Downloading update..."))
@@ -1238,10 +1249,27 @@ Note: The application will restart after the update."""
                 req = urllib.request.Request(download_url)
                 req.add_header('User-Agent', f'NetDash/{__version__}')
                 
-                with urllib.request.urlopen(req, context=context, timeout=30) as response:
-                    new_content = response.read()
+                try:
+                    with urllib.request.urlopen(req, context=context, timeout=30) as response:
+                        new_content = response.read()
+                except ssl.SSLError as ssl_err:
+                    self.log(f"SSL verification failed during download: {str(ssl_err)}")
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Download Failed",
+                        f"SSL certificate verification failed during download.\n\nThis could indicate a security issue.\n\nError: {str(ssl_err)}"
+                    ))
+                    return
                 
-                # Get the current script path
+                # Basic validation: check if downloaded content looks like Python code
+                if not new_content or len(new_content) < 1000:
+                    raise ValueError("Downloaded file is too small or empty")
+                
+                # Check for Python shebang or import statements
+                content_start = new_content[:500].decode('utf-8', errors='ignore')
+                if not ('#!/usr/bin/env python' in content_start or 'import' in content_start):
+                    raise ValueError("Downloaded file does not appear to be a Python script")
+                
+                # Get the current script path (absolute)
                 current_script = os.path.abspath(__file__)
                 
                 # Create a backup of the current version
@@ -1258,6 +1286,12 @@ Note: The application will restart after the update."""
                 # Prompt to restart
                 self.root.after(0, lambda: self._prompt_restart())
                 
+            except ValueError as ve:
+                self.log(f"Update validation failed: {str(ve)}")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Update Failed",
+                    f"Downloaded file failed validation.\n\nError: {str(ve)}\n\nThe update was not installed. Your current version is unchanged."
+                ))
             except Exception as e:
                 self.log(f"Update failed: {str(e)}")
                 self.root.after(0, lambda: messagebox.showerror(
@@ -1276,9 +1310,27 @@ Note: The application will restart after the update."""
             "Update installed successfully!\n\nThe application needs to restart to apply the changes.\n\nRestart now?"
         ):
             self.log("Restarting application...")
-            # Restart the application
-            python = sys.executable
-            os.execl(python, python, *sys.argv)
+            try:
+                # Get absolute path to script and Python interpreter
+                script_path = os.path.abspath(__file__)
+                python = sys.executable
+                
+                # Use subprocess for more reliable restart
+                import subprocess
+                subprocess.Popen([python, script_path], 
+                               cwd=os.path.dirname(script_path),
+                               start_new_session=True if platform.system() != 'Windows' else False)
+                
+                # Exit current instance
+                self.root.quit()
+                self.root.destroy()
+                sys.exit(0)
+            except Exception as e:
+                self.log(f"Restart failed: {str(e)}")
+                messagebox.showerror(
+                    "Restart Failed",
+                    f"Could not automatically restart.\n\nError: {str(e)}\n\nPlease close and restart the application manually."
+                )
         else:
             self.log("Application restart postponed")
             messagebox.showinfo(
